@@ -44,6 +44,27 @@ const AV_INTERVAL: Partial<Record<Resolution, string>> = {
 };
 
 /**
+ * Prose that means "slow down", which clears on its own.
+ *
+ * Checked before the entitlement test because Alpha Vantage appends the same
+ * "you may subscribe to any of the premium plans" sentence to both messages, so
+ * matching on the word "premium" alone reads a throttle as a permanent refusal.
+ */
+function isThrottled(info: string): boolean {
+  return /higher API call volume|rate limit|call frequency|spreading out your free API requests|more sparingly|per day|per minute/i.test(
+    info,
+  );
+}
+
+/**
+ * Prose that means "your plan does not include this", which never clears.
+ * Matched on the specific claim about a feature, not the marketing sentence.
+ */
+function isPremiumOnly(info: string): boolean {
+  return /is a premium (feature|endpoint|parameter)|premium (feature|endpoint) for/i.test(info);
+}
+
+/**
  * Alpha Vantage — the equity candle source.
  *
  * The free plan is 25 requests/day, so the registry treats it as a
@@ -62,6 +83,14 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
     constituents: false,
     news: false,
   };
+
+  /**
+   * Set once the plan rejects `outputsize=full`, so the rest of the process asks
+   * for `compact` directly instead of burning a call per symbol rediscovering
+   * it -- which matters on a plan that allows 25 a day. Free plans changed under
+   * this adapter; paid ones never set it.
+   */
+  private fullOutputIsPremium = false;
 
   isConfigured(): boolean {
     return env.alphaVantageKey() !== null;
@@ -89,8 +118,15 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
   }
 
   /**
-   * Alpha Vantage signals throttling and bad keys with a 200 plus a prose field.
-   * Turn those into errors before any parsing happens.
+   * Alpha Vantage signals throttling, bad keys and plan limits with a 200 plus a
+   * prose field. Turn those into errors before any parsing happens.
+   *
+   * Throttling and entitlement have to be told apart. Both arrive as prose, but
+   * "you have hit today's 25 calls" clears by itself and "this parameter is a
+   * premium feature" never will. Both used to come back as `rate_limited` with a
+   * 60-second retry, so the caller kept re-asking for something the plan is
+   * never going to serve, and the UI told the user to wait for a limit that was
+   * not the problem.
    */
   private assertPayload(raw: AVResponse): void {
     if (raw['Error Message']) {
@@ -101,8 +137,13 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
     }
     if (raw.Information) {
       const info = raw.Information;
-      const throttled = /higher API call volume|rate limit|premium/i.test(info);
-      throw new FeedError(throttled ? 'rate_limited' : 'upstream_error', info, this.label, 60_000);
+      if (isThrottled(info)) {
+        throw new FeedError('rate_limited', info, this.label, 60_000);
+      }
+      if (isPremiumOnly(info)) {
+        throw new FeedError('unsupported', info, this.label);
+      }
+      throw new FeedError('upstream_error', info, this.label);
     }
   }
 
@@ -160,12 +201,28 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
   async getCandles(asset: Asset, req: CandleRequest): Promise<CandleSeries> {
     if (asset.assetClass === 'forex') return this.getForexCandles(asset, req);
     const wire = this.wireSymbol(asset);
-    const { url, seriesKey } = this.candleUrl(wire, req);
 
-    const raw = await fetchFromProvider<AVResponse>(this.id, url, {
-      dedupeKey: `av:candles:${wire}:${req.resolution}`,
-    });
-    this.assertPayload(raw);
+    let { url, seriesKey, outputsize } = this.candleUrl(wire, req);
+    let raw: AVResponse;
+    try {
+      raw = await fetchFromProvider<AVResponse>(this.id, url, {
+        dedupeKey: `av:candles:${wire}:${req.resolution}:${outputsize ?? 'default'}`,
+      });
+      this.assertPayload(raw);
+    } catch (err) {
+      // `outputsize=full` moved behind a paid plan for TIME_SERIES_DAILY. The
+      // free plan still serves the last 100 bars, so ask for those rather than
+      // returning nothing at all -- a 100-bar chart is short, and the Outlook
+      // says which of its components that starves, but it beats a blank screen.
+      // The rejection is remembered so the wasted call happens once per process.
+      if (!(err instanceof FeedError) || err.code !== 'unsupported' || outputsize !== 'full') throw err;
+      this.fullOutputIsPremium = true;
+      ({ url, seriesKey, outputsize } = this.candleUrl(wire, req));
+      raw = await fetchFromProvider<AVResponse>(this.id, url, {
+        dedupeKey: `av:candles:${wire}:${req.resolution}:${outputsize ?? 'default'}`,
+      });
+      this.assertPayload(raw);
+    }
 
     const series = (raw as unknown as Record<string, AVSeries | undefined>)[seriesKey];
     if (!series || Object.keys(series).length === 0) {
@@ -179,20 +236,27 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
     return { bars, resolution: req.resolution, hasRange: true, hasVolume: true };
   }
 
-  private candleUrl(wire: string, req: CandleRequest): { url: string; seriesKey: string } {
+  private candleUrl(
+    wire: string,
+    req: CandleRequest,
+  ): { url: string; seriesKey: string; outputsize: 'full' | 'compact' | null } {
     const key = this.key();
     if (req.resolution === 'D') {
-      // `full` reaches back 20+ years and is what the backtest needs.
-      const span = req.to - req.from > 100 * 86_400 ? 'full' : 'compact';
+      const wantsHistory = req.to - req.from > 100 * 86_400;
+      const span = wantsHistory && !this.fullOutputIsPremium ? 'full' : 'compact';
       return {
         url: `${BASE}?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(wire)}&outputsize=${span}&apikey=${key}`,
         seriesKey: 'Time Series (Daily)',
+        outputsize: span,
       };
     }
     if (req.resolution === 'W') {
+      // TIME_SERIES_WEEKLY takes no outputsize and returns its whole history --
+      // 20+ years -- on the free plan.
       return {
         url: `${BASE}?function=TIME_SERIES_WEEKLY&symbol=${encodeURIComponent(wire)}&apikey=${key}`,
         seriesKey: 'Weekly Time Series',
+        outputsize: null,
       };
     }
     const interval = AV_INTERVAL[req.resolution];
@@ -200,9 +264,11 @@ export class AlphaVantageAdapter implements MarketDataAdapter {
     if (!interval || !seriesKey) {
       throw new FeedError('unsupported', `Resolution ${req.resolution} is not supported`, this.label);
     }
+    const span = this.fullOutputIsPremium ? 'compact' : 'full';
     return {
-      url: `${BASE}?function=TIME_SERIES_INTRADAY&symbol=${encodeURIComponent(wire)}&interval=${interval}&outputsize=full&apikey=${key}`,
+      url: `${BASE}?function=TIME_SERIES_INTRADAY&symbol=${encodeURIComponent(wire)}&interval=${interval}&outputsize=${span}&apikey=${key}`,
       seriesKey,
+      outputsize: span,
     };
   }
 

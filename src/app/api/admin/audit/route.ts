@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { readAudit, verifyChain } from '@/lib/gateway/audit';
+import { requireAdmin } from '@/lib/gateway/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
 /** The append-only log, plus a live verification of its hash chain. */
 export async function GET(request: Request) {
+  const admin = requireAdmin(request);
+  if (!admin.ok) return admin.response;
+
   const url = new URL(request.url);
   const limit = Number(url.searchParams.get('limit') ?? 100);
   const subjectId = url.searchParams.get('subjectId') ?? undefined;

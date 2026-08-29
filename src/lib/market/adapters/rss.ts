@@ -12,10 +12,16 @@ import { FeedError, type NewsItem } from '../types';
  * reproducing it. Nothing here scrapes a paywalled page.
  */
 export const DEFAULT_FEEDS: Array<{ url: string; label: string }> = [
-  { url: 'https://feeds.reuters.com/reuters/businessNews', label: 'Reuters Business' },
+  // Checked live. Two entries used to be dead and neither said so loudly:
+  // feeds.reuters.com no longer resolves at all (Reuters retired its public
+  // RSS), and feeds.a.dj.com still answers 200 with a frozen copy of January
+  // 2025, which is the worse failure of the two -- a feed that returns stale
+  // items looks healthy. The news window drops anything older than seven days,
+  // so the stale copy never reached the pane, but it never contributed either.
+  { url: 'https://www.cnbc.com/id/20910258/device/rss/rss.html', label: 'CNBC Markets' },
   { url: 'https://www.ft.com/rss/home', label: 'Financial Times' },
   { url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', label: 'CoinDesk' },
-  { url: 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml', label: 'WSJ Markets' },
+  { url: 'https://feeds.content.dowjones.io/public/rss/RSSMarketsMain', label: 'WSJ Markets' },
 ];
 
 const parser = new XMLParser({
@@ -112,7 +118,10 @@ export async function fetchFeed(url: string, label: string): Promise<FeedResult>
 
     const rawItems = channel.item ?? channel.entry ?? doc?.['rdf:RDF']?.item ?? [];
     const list: RssItem[] = Array.isArray(rawItems) ? rawItems : [rawItems];
-    const feedName = text(channel.title) ?? label;
+    // Attribute to the configured label, not the feed's own <title>. Publishers
+    // title their feeds for their own site: the FT's home feed calls itself
+    // "International homepage", which is not a source a reader can place.
+    const feedName = label;
 
     const items: NewsItem[] = [];
     for (const item of list) {

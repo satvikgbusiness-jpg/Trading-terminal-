@@ -19,7 +19,8 @@ Paper trading only, with a human approval queue for anything flagged live.
 
 ```bash
 pnpm install
-cp .env.example .env.local     # optional: works with no keys, with gaps
+cp .env.example .env.local     # market keys optional: works without them, with gaps
+echo "GMT_ADMIN_TOKEN=$(openssl rand -hex 32)" >> .env.local   # required for /bot
 pnpm db:migrate                # create the schema + append-only audit triggers
 pnpm seed                      # demo watchlist, paper account, first news pull
 pnpm dev                       # web app + background worker
@@ -27,16 +28,34 @@ pnpm dev                       # web app + background worker
 
 Open <http://localhost:3000>. `Cmd/Ctrl+K` jumps to any symbol.
 
+`GMT_ADMIN_TOKEN` is the one setting that is not optional if you intend to use the bot
+gateway. It gates `/bot` and every `/api/admin` route — live-order approvals, token
+issue and revoke, clearing a locked gateway, the audit log. Without it those refuse to
+serve at all, rather than answering anyone who can reach the port. See
+[Operator authentication](#operator-authentication).
+
 **It runs with no API keys at all.** Crypto (CoinGecko) and FX (ECB via Frankfurter)
 are keyless and work immediately. Equities and indices need a key; without one the
 terminal shows an explicit gap naming the missing key, never a zero or a placeholder.
+
+**What the free tiers actually deliver**, measured 2026-08-29 rather than taken from
+the docs:
+
+| Surface | Free-tier reality |
+| --- | --- |
+| Equity/index quotes, news, search | Finnhub, full quality |
+| Equity daily bars | Alpha Vantage, **100 bars only** — `outputsize=full` is now paid, so SMA(200) is unavailable for equities and the Outlook says so per component |
+| Equity weekly bars | Alpha Vantage, full history back to 1999 |
+| Crypto daily bars | CoinGecko, 365 bars — close-only past 30 days, so the chart draws a line and ATR is skipped |
+| FX daily bars | Frankfurter/ECB, one reference rate per day, no intraday range |
+| S&P 500 constituents | **Paid on Finnhub.** `pnpm refresh:sp500` fails cleanly and keeps the bundled 448-name snapshot |
 
 | Command | What it does |
 | --- | --- |
 | `pnpm dev` | Next dev server plus the worker, output interleaved |
 | `pnpm dev:web` | Web app only |
 | `pnpm worker` | Worker only (news, approval expiry, cache warming, pruning) |
-| `pnpm test` | 141 unit and integration tests |
+| `pnpm test` | 160 unit and integration tests |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm backtest` | Replay the Outlook score over daily bars (see below) |
 | `pnpm token:issue -- --name my-bot` | Issue a gateway token for a bot |
@@ -278,7 +297,9 @@ that fill on paper or wait for a human. **That is the entire blast radius.**
   `blocked_no_broker`, because no broker adapter exists. The approval queue is wired
   end to end and fully audited, and there is deliberately nothing behind it.
 - **Raise its own limits.** Hard limits live server-side and are re-read on every
-  order. The bot cannot read them, and no bearer-token route unlocks the gateway.
+  order. The bot cannot read them, and every route that could clear a lock, approve a
+  live intent or mint a token requires the operator secret — which a gateway bearer
+  token is not. See [Operator authentication](#operator-authentication).
 - **Talk the gateway into anything.** Every field is validated by a strict zod schema:
   unknown keys are *rejected*, not stripped and ignored; strings are length-capped;
   numbers must be finite. No bot-supplied string is ever evaluated or interpolated —
@@ -302,6 +323,22 @@ curl -X POST http://localhost:3000/api/gateway/orders \
   -H 'content-type: application/json' \
   -d '{"symbol":"AAPL","side":"buy","quantity":10,"orderType":"market","clientRef":"abc-1"}'
 ```
+
+### Operator authentication
+
+`/bot` and every `/api/admin` route require `GMT_ADMIN_TOKEN`, presented either as an
+`x-admin-token` header or as the httpOnly `SameSite=Strict` session cookie the console
+exchanges it for. The cookie carries an HMAC of the secret rather than the secret, so
+capturing it does not yield a credential that works everywhere the secret does, and it
+stops working the moment the secret is rotated. With no secret set the routes return
+503 rather than opening — an operator control that serves anyone when unconfigured is
+not a control.
+
+This matters more than it looks. Those routes are the human half of the containment
+model: they decide live-order approvals, issue and revoke bot tokens, clear a locked
+gateway and read the audit log. The `/bot` page is gated too, not just the API — it
+server-renders the audit log and the token list, so guarding only the routes would
+have left the same data one page fetch away.
 
 ### The order pipeline
 

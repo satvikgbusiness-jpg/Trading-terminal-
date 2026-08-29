@@ -11,8 +11,11 @@ export const PROVIDER_LIMITS: Record<string, RateLimit> = {
   finnhub: { requests: 55, windowMs: 60_000, minIntervalMs: 60, concurrency: 4 },
   // Alpha Vantage free tier: 5 calls/minute, 25/day. Serialised on purpose.
   alphavantage: { requests: 5, windowMs: 60_000, minIntervalMs: 12_000, concurrency: 1 },
-  // CoinGecko public API: ~30 calls/minute for demo/keyless use.
-  coingecko: { requests: 20, windowMs: 60_000, minIntervalMs: 1_200, concurrency: 2 },
+  // CoinGecko publishes ~30 calls/minute for keyless use but enforces a burst
+  // limit well under that: five calls inside six seconds drew a 429 in testing.
+  // Spaced out and capped low enough that a page load and the worker together
+  // still stay inside it.
+  coingecko: { requests: 10, windowMs: 60_000, minIntervalMs: 2_500, concurrency: 1 },
   // exchangerate.host free plan.
   exchangerate: { requests: 20, windowMs: 60_000, minIntervalMs: 500, concurrency: 2 },
   // Frankfurter (ECB reference rates) is keyless; still be polite.
@@ -22,7 +25,17 @@ export const PROVIDER_LIMITS: Record<string, RateLimit> = {
 };
 
 let applied = false;
-/** Idempotently push the limit table into the process-wide scheduler. */
+/**
+ * Idempotently push the limit table into the process-wide scheduler.
+ *
+ * Called at the bottom of this module as well as from the registry. Configuring
+ * it lazily from `adaptersFor()` alone was not enough: several call sites reach
+ * an adapter directly -- the earnings calendar, the crypto market grid -- and
+ * never go through the registry, so in a process where one of those ran first
+ * the scheduler fell back to its unconfigured default of 30 requests a minute.
+ * For Alpha Vantage, whose free plan allows five, that is six times the
+ * allowance and the provider answers by throttling.
+ */
 export function configureProviders(): void {
   if (applied) return;
   for (const [provider, limit] of Object.entries(PROVIDER_LIMITS)) {
@@ -30,6 +43,10 @@ export function configureProviders(): void {
   }
   applied = true;
 }
+
+// Every adapter imports `env` from this module, so configuring here means the
+// limits are in place before any adapter can issue its first request.
+configureProviders();
 
 export const env = {
   finnhubKey: () => process.env.FINNHUB_API_KEY?.trim() || null,

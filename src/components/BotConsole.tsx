@@ -10,6 +10,7 @@ import type { Portfolio } from '@/lib/gateway/paper';
 import type { PublicIntent } from '@/lib/gateway/service';
 import { changeColor, formatMoney, formatPrice, timeAgo } from '@/lib/format';
 import { Panel, Unavailable } from './ui';
+import { AdminSignIn } from './AdminSignIn';
 
 interface TokenRow {
   id: string;
@@ -38,6 +39,21 @@ export function BotConsole({ initial }: { initial: BotConsoleData }) {
   const [busy, startTransition] = useTransition();
   const [issued, setIssued] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  /** Set when an admin call comes back 401, i.e. the operator session lapsed. */
+  const [signedOut, setSignedOut] = useState(false);
+
+  /**
+   * Every admin call goes through here so a lapsed session shows the sign-in
+   * panel instead of the console quietly failing to refresh.
+   */
+  const adminFetch = async (input: string, init?: RequestInit): Promise<Response | null> => {
+    const response = await fetch(input, init);
+    if (response.status === 401 || response.status === 503) {
+      setSignedOut(true);
+      return null;
+    }
+    return response;
+  };
 
   // The approval countdown has to keep moving even with no server round-trip.
   useEffect(() => {
@@ -46,11 +62,13 @@ export function BotConsole({ initial }: { initial: BotConsoleData }) {
   }, []);
 
   const reload = async () => {
-    const [approvals, audit, lock] = await Promise.all([
-      fetch('/api/admin/approvals').then((r) => r.json()),
-      fetch('/api/admin/audit?limit=60').then((r) => r.json()),
-      fetch('/api/admin/unlock').then((r) => r.json()),
+    const responses = await Promise.all([
+      adminFetch('/api/admin/approvals'),
+      adminFetch('/api/admin/audit?limit=60'),
+      adminFetch('/api/admin/unlock'),
     ]);
+    if (responses.some((r) => r === null)) return;
+    const [approvals, audit, lock] = await Promise.all(responses.map((r) => r!.json()));
     setData((current) => ({
       ...current,
       pending: approvals.intents ?? [],
@@ -62,7 +80,7 @@ export function BotConsole({ initial }: { initial: BotConsoleData }) {
 
   const decide = (id: string, decision: 'approve' | 'reject') =>
     startTransition(async () => {
-      await fetch(`/api/admin/approvals/${id}`, {
+      await adminFetch(`/api/admin/approvals/${id}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ decision }),
@@ -75,19 +93,22 @@ export function BotConsole({ initial }: { initial: BotConsoleData }) {
       if (!window.confirm('Revoke every bot token, cancel open intents, and lock the gateway?')) {
         return;
       }
-      await fetch('/api/admin/kill', {
+      await adminFetch('/api/admin/kill', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason: 'kill switch pressed in the operator console' }),
       });
-      const tokens = await fetch('/api/admin/tokens').then((r) => r.json());
-      setData((current) => ({ ...current, tokens: tokens.tokens ?? current.tokens }));
+      const tokenResponse = await adminFetch('/api/admin/tokens');
+      if (tokenResponse) {
+        const tokens = await tokenResponse.json();
+        setData((current) => ({ ...current, tokens: tokens.tokens ?? current.tokens }));
+      }
       await reload();
     });
 
   const unlock = () =>
     startTransition(async () => {
-      await fetch('/api/admin/unlock', {
+      await adminFetch('/api/admin/unlock', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ note: 'cleared from the operator console' }),
@@ -97,16 +118,21 @@ export function BotConsole({ initial }: { initial: BotConsoleData }) {
 
   const issueToken = () =>
     startTransition(async () => {
-      const response = await fetch('/api/admin/tokens', {
+      const response = await adminFetch('/api/admin/tokens', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: `bot-${new Date().toISOString().slice(0, 16)}` }),
       });
+      if (!response) return;
       const body = await response.json();
       if (response.ok) setIssued(body.token);
-      const tokens = await fetch('/api/admin/tokens').then((r) => r.json());
+      const tokenResponse = await adminFetch('/api/admin/tokens');
+      if (!tokenResponse) return;
+      const tokens = await tokenResponse.json();
       setData((current) => ({ ...current, tokens: tokens.tokens ?? current.tokens }));
     });
+
+  if (signedOut) return <AdminSignIn configured />;
 
   return (
     <div className="flex flex-col gap-2 p-2">

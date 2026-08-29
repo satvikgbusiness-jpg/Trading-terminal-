@@ -25,7 +25,7 @@
 import { computeOutlook, type Bias } from '@/lib/analysis/outlook';
 import { getCandles } from '@/lib/market/service';
 import { persistCandles, readPersistedCandles } from '@/lib/candles-store';
-import type { Candle, CandleSeries } from '@/lib/market/types';
+import type { Candle, CandleSeries, Resolution } from '@/lib/market/types';
 import { tryResolveAsset } from '@/lib/symbols';
 
 /* ---------------------------------------------------------------- args --- */
@@ -45,6 +45,20 @@ const horizons = arg('--horizons', '5,20')
   .split(',')
   .map((s) => Number(s.trim()))
   .filter((n) => Number.isFinite(n) && n > 0);
+
+/**
+ * Bar resolution to test on.
+ *
+ * Daily is what the terminal itself computes and is the number to care about.
+ * Weekly exists because Alpha Vantage moved `outputsize=full` on TIME_SERIES_DAILY
+ * behind a paid plan: the free plan serves 100 daily bars, which is fewer than
+ * the warm-up alone, while TIME_SERIES_WEEKLY still returns 20+ years. A weekly
+ * run measures the same engine over a different bar length -- a related result,
+ * not a substitute, and every unit below is labelled with which one ran.
+ */
+const resolution: Resolution = arg('--resolution', 'D').trim().toUpperCase() === 'W' ? 'W' : 'D';
+const barLabel = resolution === 'W' ? 'week' : 'day';
+const barsPerYear = resolution === 'W' ? 52 : 252;
 
 /** Bars of history required before the engine is allowed to express a view. */
 const WARMUP_BARS = 220;
@@ -70,12 +84,15 @@ interface Bucket {
 const emptyBucket = (): Bucket => ({ n: 0, hits: 0, sumReturn: 0 });
 
 async function loadSeries(symbol: string): Promise<CandleSeries | null> {
-  const stored = readPersistedCandles(symbol, 'D');
-  const needed = Math.ceil(years * 252) + WARMUP_BARS;
+  const stored = readPersistedCandles(symbol, resolution);
+  const needed = Math.ceil(years * barsPerYear) + WARMUP_BARS;
   if (stored && stored.bars.length >= needed) return stored;
 
-  const lookbackDays = Math.ceil(years * 365) + Math.ceil(WARMUP_BARS * 1.5);
-  const fetched = await getCandles(symbol, { resolution: 'D', lookbackDays });
+  // Calendar days to ask for: the evaluation window, plus enough extra to cover
+  // the warm-up in whichever bar length is running.
+  const warmupDays = resolution === 'W' ? WARMUP_BARS * 7 : Math.ceil(WARMUP_BARS * 1.5);
+  const lookbackDays = Math.ceil(years * 365) + warmupDays;
+  const fetched = await getCandles(symbol, { resolution, lookbackDays });
   if (!fetched.ok) {
     console.log(`  ${symbol}: no data (${fetched.message})`);
     return stored;
@@ -99,8 +116,8 @@ async function main() {
 
   console.log('GMT Terminal - Outlook confluence backtest');
   console.log(`symbols   ${symbols.join(', ')}`);
-  console.log(`window    ${years} year(s) of daily bars`);
-  console.log(`horizons  ${horizons.map((h) => `${h}d`).join(', ')}`);
+  console.log(`window    ${years} year(s) of ${resolution === 'W' ? 'weekly' : 'daily'} bars`);
+  console.log(`horizons  ${horizons.map((h) => `${h} ${barLabel}s`).join(', ')}`);
   console.log('mode      technical components only (no historical news sentiment)\n');
 
   const observations: Observation[] = [];
@@ -170,10 +187,10 @@ async function main() {
     const baseline = universe.filter((r) => r > 0).length / universe.length;
     const baselineMean = universe.reduce((a, b) => a + b, 0) / universe.length;
 
-    console.log(`=== ${horizon}-day forward return ===`);
+    console.log(`=== ${horizon}-${barLabel} forward return ===`);
     console.log(
       `baseline: ${(baseline * 100).toFixed(1)}% of all bars were followed by a positive ` +
-        `${horizon}-day return (mean ${(baselineMean * 100).toFixed(2)}%)`,
+        `${horizon}-${barLabel} return (mean ${(baselineMean * 100).toFixed(2)}%)`,
     );
     console.log('');
     console.log(

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { approvalDecisionSchema, formatIssues, orderIdSchema } from '@/lib/gateway/schemas';
 import { approveIntent, rejectIntent } from '@/lib/gateway/service';
+import { requireAdmin } from '@/lib/gateway/admin-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,9 @@ export const dynamic = 'force-dynamic';
  * every live intent is decided one at a time by a person.
  */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const admin = requireAdmin(request);
+  if (!admin.ok) return admin.response;
+
   const { id } = await context.params;
   const idCheck = orderIdSchema.safeParse(id);
   if (!idCheck.success) {

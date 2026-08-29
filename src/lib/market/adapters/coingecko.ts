@@ -45,6 +45,20 @@ interface MarketRow {
  */
 const OHLC_WINDOWS = [365, 180, 90, 30, 14, 7, 1] as const;
 
+/**
+ * Widest span, in days, for which `/ohlc` still returns bars fine enough to
+ * aggregate into daily ones.
+ *
+ * Measured live rather than assumed: `days=365` comes back 4 days apart and
+ * `days=90` likewise, so the granularity check rejects both and the step-down
+ * lands on `days=30`. A 400-day chart therefore used to render 31 bars. Past
+ * this span the adapter switches feeds instead of quietly serving a month.
+ */
+const MAX_OHLC_DAILY_SPAN = 30;
+
+/** `/market_chart` refuses anything beyond a year without a key (HTTP 401). */
+const PUBLIC_MARKET_CHART_MAX_DAYS = 365;
+
 export class CoinGeckoAdapter implements MarketDataAdapter {
   readonly id = 'coingecko';
   readonly label = 'CoinGecko';
@@ -136,6 +150,21 @@ export class CoinGeckoAdapter implements MarketDataAdapter {
     const id = this.coinId(asset);
     const vs = this.vsCurrency(asset);
     const spanDays = Math.max(1, Math.ceil((req.to - req.from) / 86_400));
+    const daily = req.resolution === 'D' || req.resolution === 'W';
+
+    // `/ohlc` carries a true high and low but only reaches back a month at daily
+    // granularity. Past that, `/market_chart` is the only keyless feed with the
+    // history the chart and the Outlook warm-up actually need, and it publishes
+    // one price per period rather than a bar -- so the series says hasRange:
+    // false and the UI draws a line instead of inventing a candle body.
+    if (daily && spanDays > MAX_OHLC_DAILY_SPAN) {
+      try {
+        return await this.marketChartCandles(asset, req, spanDays);
+      } catch (err) {
+        // Fall through to `/ohlc`: a short real-range series beats nothing.
+        if (!(err instanceof FeedError)) throw err;
+      }
+    }
 
     // Widest window that does not exceed the request, then narrower ones. A
     // narrower window returns finer bars, so if the widest is too coarse for the
@@ -191,6 +220,56 @@ export class CoinGeckoAdapter implements MarketDataAdapter {
         : `CoinGecko returned no usable OHLC for ${id}`,
       this.label,
     );
+  }
+
+  /**
+   * Long daily history from `/market_chart`.
+   *
+   * The endpoint returns sampled prices, not bars: one price per period, with no
+   * high or low. Each bucket's close is the last price sampled inside it and
+   * o/h/l are set equal to it, which is what `hasRange: false` tells the chart
+   * and the indicators. Volume is dropped rather than reused -- `total_volumes`
+   * is a rolling 24-hour figure, not the volume of the bar it sits beside.
+   */
+  private async marketChartCandles(
+    asset: Asset,
+    req: CandleRequest,
+    spanDays: number,
+  ): Promise<CandleSeries> {
+    const id = this.coinId(asset);
+    const vs = this.vsCurrency(asset);
+    const pro = this.base() === PRO_BASE;
+    const days = pro ? spanDays : Math.min(spanDays, PUBLIC_MARKET_CHART_MAX_DAYS);
+
+    const raw = await fetchFromProvider<{ prices?: Array<[number, number]> }>(
+      this.id,
+      `${this.base()}/coins/${id}/market_chart?vs_currency=${vs}&days=${days}`,
+      { headers: this.headers(), dedupeKey: `cg:chart:${id}:${vs}:${days}` },
+    );
+
+    const points: Candle[] = (raw?.prices ?? [])
+      .filter((row) => Array.isArray(row) && row.length >= 2 && row.every((n) => Number.isFinite(n)))
+      .map(([ms, price]) => ({ t: Math.floor(ms / 1000), o: price, h: price, l: price, c: price, v: null }));
+
+    if (points.length === 0) {
+      throw new FeedError('not_found', `CoinGecko returned no price history for ${id}`, this.label);
+    }
+
+    // Flatten each bucket to its close. Where two samples land in the same
+    // bucket -- the day the last sample is "now" -- rolling them up would leave
+    // a high and a low built from two arbitrary snapshots, which is a range the
+    // feed never reported and the series has already declared it does not have.
+    const bars = resampleChecked(points, req.resolution)
+      .filter((b) => b.t >= req.from && b.t <= req.to)
+      .map((b) => ({ ...b, o: b.c, h: b.c, l: b.c }));
+    if (bars.length === 0) {
+      throw new FeedError(
+        'not_found',
+        `CoinGecko returned no ${req.resolution} prices for ${asset.symbol} in the requested window`,
+        this.label,
+      );
+    }
+    return { bars, resolution: req.resolution, hasRange: false, hasVolume: false };
   }
 
   async searchSymbols(query: string): Promise<Asset[]> {
