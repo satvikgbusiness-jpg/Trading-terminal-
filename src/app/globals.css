@@ -1,0 +1,122 @@
+@import 'tailwindcss';
+
+/*
+ * GMT Terminal theme.
+ *
+ * Dense, monospace, near-black. The colour vocabulary is deliberately small so
+ * that colour always means something: green up, red down, amber caution or
+ * stale, cyan for structure and labels. Anything grey is metadata.
+ */
+
+@theme {
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --color-term-bg: #08090b;
+  --color-term-panel: #0e1014;
+  --color-term-panel-2: #14171d;
+  --color-term-border: #1e232c;
+  --color-term-border-bright: #2b323d;
+
+  --color-term-text: #c9ced8;
+  --color-term-bright: #eef1f6;
+  --color-term-dim: #6a7382;
+  --color-term-faint: #454c58;
+
+  --color-term-up: #17c964;
+  --color-term-up-dim: #0d6b36;
+  --color-term-down: #ff4d4d;
+  --color-term-down-dim: #7a2020;
+  --color-term-warn: #ffb020;
+  --color-term-accent: #38bdf8;
+  --color-term-violet: #a78bfa;
+
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-term-bg);
+  color: var(--color-term-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers must line up in columns; that is most of what makes a grid readable. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-term-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-term-border-bright);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-term-dim);
+}
+
+@utility panel {
+  background-color: var(--color-term-panel);
+  border: 1px solid var(--color-term-border);
+}
+
+@utility label {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-term-dim);
+}
+
+/* The ticker tape. Duplicated content scrolls a full 50% for a seamless loop. */
+@keyframes tape {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.animate-tape {
+  animation: tape 90s linear infinite;
+}
+.animate-tape:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-tape {
+    animation: none;
+  }
+}
+
+/* A brief flash when a streamed quote changes, so movement is visible without
+   watching every row. */
+@keyframes flash-up {
+  0% { background-color: color-mix(in srgb, var(--color-term-up) 28%, transparent); }
+  100% { background-color: transparent; }
+}
+@keyframes flash-down {
+  0% { background-color: color-mix(in srgb, var(--color-term-down) 28%, transparent); }
+  100% { background-color: transparent; }
+}
+.flash-up { animation: flash-up 700ms ease-out; }
+.flash-down { animation: flash-down 700ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flash-up, .flash-down { animation: none; }
+}

@@ -2,11 +2,11 @@
   "name": "gmt-terminal",
   "version": "0.1.0",
   "private": true,
-  "description": "GMT Terminal — a Bloomberg-style market terminal for US equities, crypto and forex.",
+  "description": "GMT Terminal \u2014 a Bloomberg-style market terminal for US equities, crypto and forex.",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:web": "next dev",
-    "worker": "tsx scripts/worker.ts",
+    "worker": "tsx --require ./scripts/_bootstrap.cjs scripts/worker.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -15,9 +15,9 @@
     "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx scripts/migrate.ts",
-    "seed": "tsx scripts/seed.ts",
-    "backtest": "tsx scripts/backtest.ts",
-    "token:issue": "tsx scripts/issue-token.ts",
+    "seed": "tsx --require ./scripts/_bootstrap.cjs scripts/seed.ts",
+    "backtest": "tsx --require ./scripts/_bootstrap.cjs scripts/backtest.ts",
+    "token:issue": "tsx --require ./scripts/_bootstrap.cjs scripts/issue-token.ts",
     "setup": "pnpm db:migrate && pnpm seed"
   },
   "dependencies": {

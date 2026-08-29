@@ -25,9 +25,9 @@ export interface CacheHit<T> {
   expired: boolean;
 }
 
-const CACHE_ROOT = process.env.GMT_CACHE_DIR ?? path.join(process.cwd(), '.cache');
+export const CACHE_ROOT = process.env.GMT_CACHE_DIR ?? path.join(process.cwd(), '.cache');
 /** Entries older than this are pruned from disk and never served, even as stale. */
-const MAX_AGE_MS = Number(process.env.GMT_CACHE_MAX_AGE_MS ?? 7 * 24 * 60 * 60 * 1000);
+export const MAX_AGE_MS = Number(process.env.GMT_CACHE_MAX_AGE_MS ?? 7 * 24 * 60 * 60 * 1000);
 
 function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 40);
@@ -39,7 +39,8 @@ function filePathFor(namespace: string, key: string): string {
 }
 
 export class DiskCache {
-  private memory = new Map<string, CacheEntry<unknown>>();
+  /** Exposed so the worker-only maintenance module can clear it after a prune. */
+  memory = new Map<string, CacheEntry<unknown>>();
   private readonly maxMemoryEntries: number;
 
   constructor(maxMemoryEntries = 2000) {
@@ -107,40 +108,6 @@ export class DiskCache {
     this.memory.set(memKey, entry);
   }
 
-  /** Remove expired files from disk. Called by the worker. */
-  async prune(): Promise<number> {
-    let removed = 0;
-    const now = Date.now();
-    let namespaces: string[];
-    try {
-      namespaces = await fs.readdir(CACHE_ROOT);
-    } catch {
-      return 0;
-    }
-    for (const ns of namespaces) {
-      const dir = path.join(CACHE_ROOT, ns);
-      let files: string[];
-      try {
-        files = await fs.readdir(dir);
-      } catch {
-        continue;
-      }
-      for (const file of files) {
-        const full = path.join(dir, file);
-        try {
-          const stat = await fs.stat(full);
-          if (now - stat.mtimeMs > MAX_AGE_MS) {
-            await fs.unlink(full);
-            removed += 1;
-          }
-        } catch {
-          /* raced with another prune */
-        }
-      }
-    }
-    this.memory.clear();
-    return removed;
-  }
 }
 
 export const diskCache = new DiskCache();
