@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787963695220,
+      "tag": "0000_milky_pride",
+      "breakpoints": true
+    }
+  ]
+}
