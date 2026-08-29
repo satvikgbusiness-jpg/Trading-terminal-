@@ -1,0 +1,49 @@
+{
+  "name": "gmt-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GMT Terminal — a Bloomberg-style market terminal for US equities, crypto and forex.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "next dev",
+    "worker": "tsx scripts/worker.ts",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:push": "drizzle-kit push",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "seed": "tsx scripts/seed.ts",
+    "backtest": "tsx scripts/backtest.ts",
+    "token:issue": "tsx scripts/issue-token.ts",
+    "setup": "pnpm db:migrate && pnpm seed"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "clsx": "2.1.1",
+    "drizzle-orm": "0.45.2",
+    "fast-xml-parser": "5.11.1",
+    "lightweight-charts": "5.2.1",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "wink-sentiment": "5.0.2",
+    "zod": "4.5.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "drizzle-kit": "0.31.10",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  },
+  "packageManager": "pnpm@10.33.0"
+}
