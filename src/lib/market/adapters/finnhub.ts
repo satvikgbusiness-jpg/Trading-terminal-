@@ -43,6 +43,17 @@ interface FinnhubNews {
   image?: string; related?: string; source?: string; summary?: string; url?: string;
 }
 
+interface FinnhubEarnings {
+  earningsCalendar?: Array<{
+    date?: string;
+    symbol?: string;
+    hour?: string;
+    year?: number;
+    quarter?: number;
+    epsEstimate?: number | null;
+  }>;
+}
+
 interface FinnhubConstituent {
   constituents?: string[];
   constituentsBreakdown?: Array<{ symbol?: string; name?: string; sector?: string; industry?: string }>;
@@ -179,6 +190,27 @@ export class FinnhubAdapter implements MarketDataAdapter {
       `Finnhub returned no constituents for ${indexSymbol} (this endpoint requires a paid plan)`,
       this.label,
     );
+  }
+
+  /**
+   * Scheduled earnings dates for a symbol.
+   *
+   * Shown in the external-factors strip as context. Returns an empty list rather
+   * than throwing when the endpoint is unavailable: a missing earnings date
+   * should not blank the rest of the strip.
+   */
+  async getEarningsCalendar(asset: Asset, from: number, to: number): Promise<string[]> {
+    const url =
+      `${BASE}/calendar/earnings?from=${isoDate(from)}&to=${isoDate(to)}` +
+      `&symbol=${encodeURIComponent(this.wireSymbol(asset))}&token=${this.key()}`;
+
+    const raw = await fetchFromProvider<FinnhubEarnings>(this.id, url, {
+      dedupeKey: `finnhub:earnings:${asset.symbol}:${isoDate(from)}`,
+    });
+
+    return (raw.earningsCalendar ?? [])
+      .map((row) => row.date)
+      .filter((date): date is string => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date));
   }
 
   async getNews(asset: Asset | null, from: number, to: number): Promise<NewsItem[]> {

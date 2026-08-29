@@ -1,7 +1,6 @@
 import 'server-only';
 import { NextResponse } from 'next/server';
 import { authenticate, hasScope, type AuthContext, type Scope } from './auth';
-import { readLockState } from './limits';
 
 /**
  * Shared plumbing for the bot-facing routes.
@@ -11,10 +10,6 @@ import { readLockState } from './limits';
  * traces, no SQL, no file paths, no configured limit values beyond the one it
  * actually hit.
  */
-
-export interface GuardFailure {
-  response: NextResponse;
-}
 
 export type Guarded = { ok: true; auth: AuthContext } | { ok: false; response: NextResponse };
 
@@ -76,10 +71,4 @@ export async function readJson(request: Request): Promise<{ ok: true; value: unk
   } catch {
     return { ok: false, response: json({ error: 'Body must be valid JSON', code: 'bad_json' }, 400) };
   }
-}
-
-/** Surface the lock state on every gateway response so a bot can see it. */
-export function lockHeaders(): Record<string, string> {
-  const lock = readLockState();
-  return lock.locked ? { 'x-gmt-gateway': 'locked' } : { 'x-gmt-gateway': 'open' };
 }

@@ -322,11 +322,6 @@ export function checkPricedLimits(ctx: CheckContext): Breach | null {
   return null;
 }
 
-/** Both phases together. Used to preview an order without submitting it. */
-export function checkLimits(ctx: CheckContext): Breach | null {
-  return checkPrePriceLimits(ctx) ?? checkPricedLimits(ctx);
-}
-
 /** Record a breach and lock the gateway. */
 export function recordBreach(breach: Breach, actor: string, context: Record<string, unknown>): void {
   appendAudit({

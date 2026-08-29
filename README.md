@@ -40,6 +40,7 @@ terminal shows an explicit gap naming the missing key, never a zero or a placeho
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm backtest` | Replay the Outlook score over daily bars (see below) |
 | `pnpm token:issue -- --name my-bot` | Issue a gateway token for a bot |
+| `pnpm refresh:sp500` | Replace the bundled constituent snapshot with a live list |
 
 ---
 
@@ -97,7 +98,10 @@ These are limits of the data, not bugs, and the UI says so where each one bites:
   favour of close-to-close volatility, labelled as such.
 - **The bundled S&P 500 list is a partial snapshot.** `data/sp500.json` carries 448
   of roughly 500 members, hand-compiled, with the caveat inside the file. It exists so
-  search and the heatmap work with no key. The heatmap prices a sample (default 60,
+  search and the heatmap work with no key. `pnpm refresh:sp500` replaces it with a live
+  list from a provider that serves index constituents (a paid endpoint on most plans);
+  it refuses to overwrite with a list materially smaller than the bundled one, so a
+  truncated response cannot silently shrink the universe. The heatmap prices a sample (default 60,
   spread across all 11 sectors) and states its coverage on screen; it is not
   index-weighted and is not index performance.
 

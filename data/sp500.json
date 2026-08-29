@@ -5,8 +5,8 @@
   "count": 448,
   "nominalIndexSize": 500,
   "complete": false,
-  "disclaimer": "PARTIAL STATIC SNAPSHOT, NOT AN AUTHORITATIVE INDEX MEMBERSHIP LIST. This file lists 448 of roughly 500 S&P 500 constituents, hand-compiled and not sourced from S&P Dow Jones Indices. Index membership changes several times a year, so some entries may be stale and some current members are missing. It exists so the sector heatmap and symbol search work on a clean checkout with no API key. Run `pnpm tsx scripts/refresh-sp500.ts` with a data provider that serves index constituents to replace it with a live list. Do not rely on this file for index weighting, benchmarking, or any calculation that assumes complete membership.",
-  "source": "hand-compiled snapshot; refreshable via scripts/refresh-sp500.ts",
+  "disclaimer": "PARTIAL STATIC SNAPSHOT, NOT AN AUTHORITATIVE INDEX MEMBERSHIP LIST. This file lists 448 of roughly 500 S&P 500 constituents, hand-compiled and not sourced from S&P Dow Jones Indices. Index membership changes several times a year, so some entries may be stale and some current members are missing. It exists so the sector heatmap and symbol search work on a clean checkout with no API key. Run `pnpm refresh:sp500` with a data provider that serves index constituents to replace it with a live list. Do not rely on this file for index weighting, benchmarking, or any calculation that assumes complete membership.",
+  "source": "hand-compiled snapshot; refresh with `pnpm refresh:sp500`",
   "sectors": [
     "Communication Services",
     "Consumer Discretionary",

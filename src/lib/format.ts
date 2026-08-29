@@ -1,15 +1,14 @@
 /** Shared number and time formatting. Terminals live or die on aligned columns. */
 
-export function formatPrice(value: number | null | undefined, currency = 'USD'): string {
+export function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '--';
   // FX carries more decimals than equities; crypto sub-cent names need more still.
   const abs = Math.abs(value);
-  const digits = abs >= 1000 ? 2 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
-  const formatted = value.toLocaleString('en-US', {
+  const digits = abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
+  return value.toLocaleString('en-US', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
-  return currency === 'USD' ? formatted : `${formatted}`;
 }
 
 export function formatChange(value: number | null | undefined): string {

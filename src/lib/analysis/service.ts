@@ -5,7 +5,8 @@ import type { CandleSeries, Provenance, Quote, Result } from '@/lib/market/types
 import { refreshAndReadNews, type ScoredNews } from '@/lib/news';
 import { aggregateSentiment, type AggregateResult } from './sentiment';
 import { computeOutlook, type Outlook } from './outlook';
-import { relevantMacroEvents, type MacroEvent } from './macro';
+import { earningsEvent, relevantMacroEvents, type MacroEvent } from './macro';
+import { finnhub } from '@/lib/market/registry';
 
 /**
  * Assembles everything a ticker screen needs in one pass, so the page renders a
@@ -66,6 +67,8 @@ export async function getSymbolSnapshot(
     refreshAndReadNews({ symbol: asset.symbol, days: newsDays, limit: 40 }),
   ]);
 
+  const earnings = await fetchEarnings(asset);
+
   const sentiment = aggregateSentiment(
     news.items.map((n) => ({ score: n.sentimentScore, publishedAt: n.publishedAt })),
   );
@@ -94,9 +97,29 @@ export async function getSymbolSnapshot(
     sentiment,
     outlook,
     outlookGap,
-    macro: relevantMacroEvents(asset),
+    macro: relevantMacroEvents(asset, earnings),
     provenance: dedupeProvenance(provenance),
   };
+}
+
+/**
+ * Upcoming earnings dates, when a provider can supply them.
+ *
+ * Earnings only exist for equities, and the endpoint is on a paid plan for some
+ * accounts, so a failure here degrades to an empty list -- the rest of the
+ * external-factors strip still renders.
+ */
+async function fetchEarnings(asset: Asset): Promise<MacroEvent[]> {
+  if (asset.assetClass !== 'equity') return [];
+  if (!finnhub.isConfigured()) return [];
+
+  const now = Date.now();
+  try {
+    const dates = await finnhub.getEarningsCalendar(asset, now, now + 90 * 86_400_000);
+    return dates.map((date) => earningsEvent(asset.symbol, date, finnhub.label));
+  } catch {
+    return [];
+  }
 }
 
 function dedupeProvenance(entries: Provenance[]): Provenance[] {
@@ -109,28 +132,4 @@ function dedupeProvenance(entries: Provenance[]): Provenance[] {
     out.push(entry);
   }
   return out;
-}
-
-/**
- * A compact Outlook for list rows (watchlist, movers) where a full snapshot
- * would be far too many requests. Uses cached candles and stored news only --
- * it never triggers a fresh fetch, so rendering a 20-row watchlist costs at
- * most one provider call per symbol from the shared cache.
- */
-export async function getListOutlook(symbol: string): Promise<Outlook | null> {
-  const asset = resolveAsset(symbol);
-  const candles = await getCandles(asset.symbol, {
-    resolution: 'D',
-    lookbackDays: DEFAULT_LOOKBACK_DAYS,
-  }).catch(() => null);
-
-  if (!candles || !candles.ok || candles.data.bars.length === 0) return null;
-
-  const { readStoredNews } = await import('@/lib/news');
-  const stored = readStoredNews({ symbol: asset.symbol, days: 7, limit: 40 });
-  const sentiment = aggregateSentiment(
-    stored.map((n) => ({ score: n.sentimentScore, publishedAt: n.publishedAt })),
-  );
-
-  return computeOutlook({ symbol: asset.symbol, series: candles.data, news: sentiment });
 }

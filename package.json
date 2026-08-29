@@ -13,12 +13,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:push": "drizzle-kit push",
     "db:migrate": "tsx scripts/migrate.ts",
     "seed": "tsx --require ./scripts/_bootstrap.cjs scripts/seed.ts",
     "backtest": "tsx --require ./scripts/_bootstrap.cjs scripts/backtest.ts",
     "token:issue": "tsx --require ./scripts/_bootstrap.cjs scripts/issue-token.ts",
-    "setup": "pnpm db:migrate && pnpm seed"
+    "setup": "pnpm db:migrate && pnpm seed",
+    "refresh:sp500": "tsx --require ./scripts/_bootstrap.cjs scripts/refresh-sp500.ts"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",
