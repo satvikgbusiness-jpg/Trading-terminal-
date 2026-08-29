@@ -36,7 +36,7 @@ terminal shows an explicit gap naming the missing key, never a zero or a placeho
 | `pnpm dev` | Next dev server plus the worker, output interleaved |
 | `pnpm dev:web` | Web app only |
 | `pnpm worker` | Worker only (news, approval expiry, cache warming, pruning) |
-| `pnpm test` | 117 unit and integration tests |
+| `pnpm test` | 141 unit and integration tests |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm backtest` | Replay the Outlook score over daily bars (see below) |
 | `pnpm token:issue -- --name my-bot` | Issue a gateway token for a bot |
@@ -88,10 +88,15 @@ These are limits of the data, not bugs, and the UI says so where each one bites:
   with its own price, dividends and tracking error.
 - **FTSE 100, DAX and Nikkei have no configured feed.** Their tiles render an
   explicit gap rather than being quietly dropped from the grid.
-- **Crypto daily history is capped at ~30 days without a paid key.** CoinGecko's
-  public `/ohlc` returns 4-day bars for longer windows. The adapter refuses to pass
-  those off as daily bars — coarser bars cannot be split into finer ones without
-  inventing prices — so it returns an explicit `unsupported` error instead.
+- **Crypto daily history is limited without a paid key.** CoinGecko's public `/ohlc`
+  chooses its own bar granularity from the window size and returns coarse bars for wide
+  windows. The adapter asks for the widest window, **measures the spacing of the bars
+  that actually came back**, and steps down to a narrower window if they are too coarse
+  for the requested resolution — rather than trusting a hard-coded granularity table
+  that can silently go out of date. Coarse bars are never bucketed into finer slots.
+  It returns whatever coverage it can obtain rather than failing outright, so a crypto
+  chart renders with fewer bars instead of not at all; the Outlook then reports for
+  itself which components lacked enough history (SMA(200) typically will).
 - **FX has no intraday range and no volume.** ECB and exchangerate.host publish one
   reference rate per day. `CandleSeries.hasRange` is `false` for those feeds, the
   chart draws a **line** rather than zero-height candles, and ATR is skipped in
@@ -224,11 +229,11 @@ Walks daily bars, computes the confluence score at each bar using **only** data
 available up to that bar, and reports how often the bias was followed by a move in the
 same direction.
 
-**This README publishes no hit rate, because none has been measured on real market
-data.** The development environment had no outbound access to any data provider, so
-the script has been verified to run correctly end to end — but running it on invented
-data and quoting the result would be exactly the dishonesty this project is built to
-avoid. Run it against your own key and read the output.
+**No hit rate has been measured on real market data.** Both the build and a later
+live-verification pass ran in an environment whose egress gateway denies `CONNECT` to
+every market data host (403), with no API keys present. The harness is verified to run
+end to end; the numbers are not in yet. See [`BACKTEST.md`](./BACKTEST.md) for the
+exact attempt, the blocker, and where to paste your own results.
 
 What the output gives you:
 
@@ -314,6 +319,13 @@ Every intent runs the same path, in this order:
 5. **Priced from a real quote** — no quote, no fill. `no_market_data` rather than a
    fill at a stale or interpolated price. A paper ledger with invented fills teaches a
    bot the wrong thing.
+
+   *Measured consequence:* this gate sits ahead of the size limits, which need a price
+   to evaluate, so a **total feed outage blocks live intents from reaching the approval
+   queue at all**, not just paper fills. That is the conservative failure mode for a
+   risk gate — no price means no size check, and refusing beats queueing something
+   unchecked — but an operator should know that an empty queue during an outage means
+   "could not price", not "the bot asked for nothing".
 6. **Size limits** — order notional, position notional, concentration, evaluated
    against the position the order *would produce*, so a sequence of small orders
    cannot walk past the cap. Reducing exposure is always permitted, so a tightened
@@ -357,7 +369,7 @@ detects the tampering. The `/bot` screen shows live verification.
 ## Testing
 
 ```bash
-pnpm test        # 117 tests
+pnpm test        # 141 tests
 ```
 
 - **Indicators** — verified against Wilder's published RSI example and hand-computed
@@ -372,6 +384,34 @@ pnpm test        # 117 tests
   that any sequence returning to flat leaves cash exactly equal to realised P&L.
 - **Gateway** — a real SQLite database with the real schema and the real triggers,
   covering auth, limits, the lock, expiry, the kill switch and the audit chain.
+
+### What has and has not been verified against live providers
+
+A live-verification pass was attempted with network access and API keys expected.
+Neither was available: the egress gateway denied `CONNECT` to every market data host
+(403), and no keys were present. What that pass could and could not establish:
+
+**Verified against a running server, with no feed:**
+
+- Every page renders explicit `NO DATA` states with actionable reasons, correctly
+  distinguishing *missing API key* from *upstream failure*. Zero stat blocks render
+  where a quote failed — no fabricated prices, and sector averages show `--` rather
+  than `0.00%`.
+- Gateway: scope enforcement (`insufficient_scope`), the order-rate limit counting
+  **submitted** intents rather than fills (10 rejected orders still tripped the 11th),
+  allowlist breach locking the gateway, human unlock, kill switch revoking tokens
+  (403 afterwards), and hash-chain verification holding across 18 entries spanning 8
+  action types with no token secret in the log.
+- `pnpm refresh:sp500` and `pnpm backtest` both refuse to emit numbers when they have
+  no data, rather than substituting anything.
+
+**Not verified, and still unknown:**
+
+- Whether any adapter parses a real provider response correctly. Every adapter is
+  written to documented shapes with defensive parsing, but none has seen live JSON.
+- Provenance badges against real data age; the ETF-proxy notes; the news feeds.
+- Paper fills at a real quote, and therefore end-to-end P&L.
+- The live-intent approval queue, which requires a quote to size-check before queueing.
 
 Two real bugs the gateway tests caught, both worth knowing about:
 

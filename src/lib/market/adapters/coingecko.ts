@@ -2,7 +2,7 @@ import type { Asset, AssetClass } from '@/lib/symbols';
 import { CRYPTO_BASES } from '@/lib/symbols';
 import { fetchFromProvider } from '../http';
 import { env } from '../providers';
-import { canResample, resample } from '../resample';
+import { GranularityError, resampleChecked } from '../resample';
 import {
   FeedError,
   type AdapterCapabilities,
@@ -12,7 +12,6 @@ import {
   type Constituent,
   type MarketDataAdapter,
   type Quote,
-  type Resolution,
 } from '../types';
 
 const PUBLIC_BASE = 'https://api.coingecko.com/api/v3';
@@ -35,17 +34,16 @@ interface MarketRow {
 }
 
 /**
- * CoinGecko's public `/ohlc` endpoint picks its own granularity from the `days`
- * window. We only ever request a window whose native bars are at least as fine
- * as what the caller asked for, then roll them up — never the other way round.
+ * Windows the public `/ohlc` endpoint accepts, widest first.
+ *
+ * CoinGecko chooses its own bar granularity from the `days` value and has
+ * changed the thresholds before, so this list deliberately carries no claim
+ * about what each window returns. The adapter asks for the widest window that
+ * fits, then measures the bars that actually came back and rejects the response
+ * if they are coarser than what the caller asked for. Validating the response
+ * beats trusting a table that can silently go out of date.
  */
-const OHLC_WINDOWS: Array<{ days: number; nativeResolution: Resolution }> = [
-  { days: 1, nativeResolution: '15' },   // ~30-minute bars; treated as <=30m
-  { days: 7, nativeResolution: '60' },   // 4-hour bars
-  { days: 14, nativeResolution: '60' },
-  { days: 30, nativeResolution: '60' },
-  { days: 90, nativeResolution: 'D' },   // 4-day bars — coarser than daily
-];
+const OHLC_WINDOWS = [365, 180, 90, 30, 14, 7, 1] as const;
 
 export class CoinGeckoAdapter implements MarketDataAdapter {
   readonly id = 'coingecko';
@@ -137,47 +135,62 @@ export class CoinGeckoAdapter implements MarketDataAdapter {
   async getCandles(asset: Asset, req: CandleRequest): Promise<CandleSeries> {
     const id = this.coinId(asset);
     const vs = this.vsCurrency(asset);
-    const spanDays = Math.ceil((req.to - req.from) / 86_400);
+    const spanDays = Math.max(1, Math.ceil((req.to - req.from) / 86_400));
 
-    const window = OHLC_WINDOWS.find(
-      (w) => w.days >= spanDays && canResample(w.nativeResolution, req.resolution),
+    // Widest window that does not exceed the request, then narrower ones. A
+    // narrower window returns finer bars, so if the widest is too coarse for the
+    // requested resolution the next one down may still work.
+    const fitting = OHLC_WINDOWS.filter((days) => days <= spanDays);
+    // A request narrower than the smallest window still gets the smallest window.
+    const candidates: number[] = fitting.length > 0 ? [...fitting] : [1];
+
+    let lastGranularityError: GranularityError | null = null;
+
+    for (const days of candidates) {
+      const url = `${this.base()}/coins/${id}/ohlc?vs_currency=${vs}&days=${days}`;
+      const raw = await fetchFromProvider<Array<[number, number, number, number, number]>>(this.id, url, {
+        headers: this.headers(),
+        dedupeKey: `cg:ohlc:${id}:${vs}:${days}`,
+      });
+
+      if (!Array.isArray(raw) || raw.length === 0) continue;
+
+      const native: Candle[] = raw
+        .filter((row) => Array.isArray(row) && row.length >= 5 && row.every((n) => Number.isFinite(n)))
+        .map(([ms, o, h, l, c]) => ({ t: Math.floor(ms / 1000), o, h, l, c, v: null }));
+
+      if (native.length === 0) continue;
+
+      let bars: Candle[];
+      try {
+        bars = resampleChecked(native, req.resolution);
+      } catch (err) {
+        if (err instanceof GranularityError) {
+          // This window came back too coarse. Try a narrower one rather than
+          // passing coarse bars off as fine ones.
+          lastGranularityError = err;
+          continue;
+        }
+        throw err;
+      }
+
+      const inWindow = bars.filter((b) => b.t >= req.from && b.t <= req.to);
+      if (inWindow.length === 0) continue;
+
+      // Deliberately returns whatever coverage the feed could supply rather than
+      // failing outright: a 30-bar crypto chart is far more useful than none, and
+      // the Outlook reports for itself which components lacked enough history.
+      return { bars: inWindow, resolution: req.resolution, hasRange: true, hasVolume: false };
+    }
+
+    throw new FeedError(
+      'unsupported',
+      lastGranularityError
+        ? `CoinGecko's public OHLC feed could not supply ${req.resolution} bars for ${asset.symbol}: ` +
+          `${lastGranularityError.message} Set COINGECKO_API_KEY with COINGECKO_PLAN=pro for longer history.`
+        : `CoinGecko returned no usable OHLC for ${id}`,
+      this.label,
     );
-
-    if (!window) {
-      const finest = OHLC_WINDOWS.filter((w) => canResample(w.nativeResolution, req.resolution))
-        .map((w) => w.days)
-        .pop();
-      throw new FeedError(
-        'unsupported',
-        finest
-          ? `CoinGecko's public OHLC feed only returns bars at or finer than ${req.resolution} for windows up to ${finest} days. ` +
-            `A ${spanDays}-day window would come back as coarser bars, which cannot be split into ${req.resolution} bars without inventing prices. ` +
-            `Set COINGECKO_API_KEY with COINGECKO_PLAN=pro for longer daily history.`
-          : `CoinGecko cannot serve ${req.resolution} bars.`,
-        this.label,
-      );
-    }
-
-    const url = `${this.base()}/coins/${id}/ohlc?vs_currency=${vs}&days=${window.days}`;
-    const raw = await fetchFromProvider<Array<[number, number, number, number, number]>>(this.id, url, {
-      headers: this.headers(),
-      dedupeKey: `cg:ohlc:${id}:${vs}:${window.days}`,
-    });
-
-    if (!Array.isArray(raw) || raw.length === 0) {
-      throw new FeedError('not_found', `CoinGecko returned no OHLC for ${id}`, this.label);
-    }
-
-    const native: Candle[] = raw
-      .filter((row) => Array.isArray(row) && row.length >= 5 && row.every((n) => Number.isFinite(n)))
-      .map(([ms, o, h, l, c]) => ({ t: Math.floor(ms / 1000), o, h, l, c, v: null }));
-
-    const bars = resample(native, req.resolution).filter((b) => b.t >= req.from && b.t <= req.to);
-    if (bars.length === 0) {
-      throw new FeedError('not_found', `No ${req.resolution} bars for ${asset.symbol} in window`, this.label);
-    }
-    // CoinGecko's OHLC endpoint carries no volume at all.
-    return { bars, resolution: req.resolution, hasRange: true, hasVolume: false };
   }
 
   async searchSymbols(query: string): Promise<Asset[]> {
